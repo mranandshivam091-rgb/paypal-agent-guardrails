@@ -2,9 +2,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // gemini-2.0-flash and gemini-2.5-flash are both retired/unavailable to new API keys as of
-// Nov 2026 — gemini-3.8-flash is the current flash model, but being new it's prone to
-// transient 503 "high demand" errors, hence the retry below.
-const MODEL = 'gemini-3.8-flash';
+// Nov 2026. gemini-3.5-flash-lite has a 500 requests/day free-tier quota (vs. 20/day for
+// gemini-3.8-flash), which matters more for this project than the newer model's extra quality.
+const MODEL = 'gemini-3.5-flash-lite';
 
 function stripCodeFences(text) {
   return text
