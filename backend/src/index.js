@@ -1,8 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-require('./db');
-const { createOrder, captureOrder } = require('./services/paypal');
+const db = require('./db');
+const { createOrder, captureOrder, createOrderWithTestCard } = require('./services/paypal');
+const { evaluateTransaction } = require('./guardrails');
 
 const app = express();
 app.use(cors());
@@ -12,11 +13,106 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Basic PayPal sandbox smoke test. Capture will fail with ORDER_NOT_APPROVED — that's expected,
+// since a real capture needs buyer approval. It still proves the credentials/auth work.
 app.post('/api/test-order', async (req, res) => {
   try {
     const order = await createOrder(5, 'PayPal Agent Guardrails test order');
     const capture = await captureOrder(order.id);
     res.json({ order, capture });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Full create+capture round trip using a PayPal sandbox test card (no buyer redirect needed).
+app.post('/api/test-order-card', async (req, res) => {
+  try {
+    const order = await createOrderWithTestCard(5, 'PayPal Agent Guardrails test order (card)');
+    res.json({ order });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/rules', (req, res) => {
+  const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
+  res.json(rules);
+});
+
+app.put('/api/rules', (req, res) => {
+  const { max_transaction_amount, daily_limit, allowed_categories, blocked_categories } = req.body;
+  db.prepare(
+    `UPDATE rules SET
+      max_transaction_amount = ?,
+      daily_limit = ?,
+      allowed_categories = ?,
+      blocked_categories = ?,
+      updated_at = datetime('now')
+     WHERE id = 1`
+  ).run(
+    Number(max_transaction_amount),
+    Number(daily_limit),
+    allowed_categories || '',
+    blocked_categories || ''
+  );
+  const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
+  res.json(rules);
+});
+
+app.get('/api/transactions', (req, res) => {
+  const transactions = db.prepare('SELECT * FROM transactions ORDER BY id DESC').all();
+  res.json(transactions);
+});
+
+// The agent-facing endpoint: an AI agent proposes a purchase with its reasoning, the guardrail
+// layer checks it against the active rules and scores its risk, logs the decision, and only
+// talks to PayPal if the purchase is allowed.
+app.post('/api/agent/purchase', async (req, res) => {
+  try {
+    const { amount, category, reasoning } = req.body;
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+
+    const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
+    const todaySpend = db
+      .prepare(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
+         WHERE status = 'approved' AND date(created_at) = date('now')`
+      )
+      .get().total;
+
+    const { allowed, ruleCheckResult, riskScore } = evaluateTransaction(
+      { amount, category, reasoning },
+      rules,
+      todaySpend
+    );
+
+    let status = allowed ? 'approved' : 'blocked';
+    let paypalOrderId = null;
+
+    if (allowed) {
+      try {
+        const order = await createOrder(amount, reasoning || category || 'Agent purchase');
+        paypalOrderId = order.id;
+      } catch (err) {
+        status = 'error';
+      }
+    }
+
+    const result = db
+      .prepare(
+        `INSERT INTO transactions
+          (amount, category, agent_reasoning, rule_check_result, risk_score, status, paypal_order_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(amount, category, reasoning, ruleCheckResult, riskScore, status, paypalOrderId);
+
+    const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(result.lastInsertRowid);
+    res.json(transaction);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

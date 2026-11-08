@@ -14,7 +14,18 @@ db.exec(`
     status TEXT,
     paypal_order_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  )
+  );
+
+  CREATE TABLE IF NOT EXISTS rules (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    max_transaction_amount REAL NOT NULL DEFAULT 100,
+    daily_limit REAL NOT NULL DEFAULT 500,
+    allowed_categories TEXT NOT NULL DEFAULT '',
+    blocked_categories TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  INSERT OR IGNORE INTO rules (id) VALUES (1);
 `);
 
 module.exports = db;
