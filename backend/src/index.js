@@ -4,6 +4,7 @@ const cors = require('cors');
 const db = require('./db');
 const { createOrder, captureOrder, createOrderWithTestCard } = require('./services/paypal');
 const { evaluateTransaction } = require('./guardrails');
+const { generateAgentReasoning, assessRisk } = require('./services/ai');
 
 const app = express();
 app.use(cors());
@@ -67,12 +68,13 @@ app.get('/api/transactions', (req, res) => {
   res.json(transactions);
 });
 
-// The agent-facing endpoint: an AI agent proposes a purchase with its reasoning, the guardrail
-// layer checks it against the active rules and scores its risk, logs the decision, and only
-// talks to PayPal if the purchase is allowed.
+// The agent-facing endpoint: an AI agent proposes a purchase (optionally with its own reasoning
+// — if omitted, Gemini generates it). The deterministic rule check runs first; Gemini then scores
+// risk using that result plus recent transaction history. PayPal is only called if allowed.
 app.post('/api/agent/purchase', async (req, res) => {
   try {
-    const { amount, category, reasoning } = req.body;
+    const { amount, category } = req.body;
+    let { reasoning } = req.body;
     if (typeof amount !== 'number' || amount <= 0) {
       return res.status(400).json({ error: 'amount must be a positive number' });
     }
@@ -85,10 +87,19 @@ app.post('/api/agent/purchase', async (req, res) => {
       )
       .get().total;
 
-    const { allowed, ruleCheckResult, riskScore } = evaluateTransaction(
-      { amount, category, reasoning },
-      rules,
-      todaySpend
+    const { allowed, ruleCheckResult } = evaluateTransaction({ amount, category }, rules, todaySpend);
+
+    if (!reasoning) {
+      reasoning = await generateAgentReasoning(category || 'this item', amount, category);
+    }
+
+    const recentTransactions = db.prepare('SELECT * FROM transactions ORDER BY id DESC LIMIT 5').all();
+    const { riskScore, explanation: riskExplanation } = await assessRisk(
+      amount,
+      category,
+      reasoning,
+      ruleCheckResult,
+      recentTransactions
     );
 
     let status = allowed ? 'approved' : 'blocked';
@@ -106,10 +117,10 @@ app.post('/api/agent/purchase', async (req, res) => {
     const result = db
       .prepare(
         `INSERT INTO transactions
-          (amount, category, agent_reasoning, rule_check_result, risk_score, status, paypal_order_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+          (amount, category, agent_reasoning, rule_check_result, risk_score, risk_explanation, status, paypal_order_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(amount, category, reasoning, ruleCheckResult, riskScore, status, paypalOrderId);
+      .run(amount, category, reasoning, ruleCheckResult, riskScore, riskExplanation, status, paypalOrderId);
 
     const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(result.lastInsertRowid);
     res.json(transaction);

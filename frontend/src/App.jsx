@@ -100,7 +100,7 @@ function PurchaseSimulator({ onResult }) {
         <input type="text" value={category} onChange={(e) => setCategory(e.target.value)} />
       </label>
       <label>
-        Agent's reasoning
+        Agent's reasoning (optional — leave blank to let AI generate the agent's reasoning)
         <textarea
           value={reasoning}
           onChange={(e) => setReasoning(e.target.value)}
@@ -136,6 +136,7 @@ function AuditLog({ transactions, refresh }) {
             <th>Reasoning</th>
             <th>Rule check</th>
             <th>Risk</th>
+            <th>Risk notes</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -148,11 +149,12 @@ function AuditLog({ transactions, refresh }) {
               <td>{t.agent_reasoning}</td>
               <td>{t.rule_check_result}</td>
               <td>{t.risk_score}</td>
+              <td>{t.risk_explanation}</td>
               <td><span className={statusClass(t.status)}>{t.status}</span></td>
             </tr>
           ))}
           {transactions.length === 0 && (
-            <tr><td colSpan={7}>No transactions yet.</td></tr>
+            <tr><td colSpan={8}>No transactions yet.</td></tr>
           )}
         </tbody>
       </table>

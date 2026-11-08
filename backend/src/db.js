@@ -11,6 +11,7 @@ db.exec(`
     agent_reasoning TEXT,
     rule_check_result TEXT,
     risk_score REAL,
+    risk_explanation TEXT,
     status TEXT,
     paypal_order_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
