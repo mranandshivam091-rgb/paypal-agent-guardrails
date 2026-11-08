@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { AgGridReact } from 'ag-grid-react'
+import { AllCommunityModule, ModuleRegistry, themeQuartz, colorSchemeDark } from 'ag-grid-community'
 import './App.css'
 
+ModuleRegistry.registerModules([AllCommunityModule])
+
+const gridTheme = themeQuartz.withPart(colorSchemeDark)
+
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+const REFRESH_INTERVAL_MS = 5000
 
 function RulesPanel() {
   const [rules, setRules] = useState(null)
@@ -114,50 +121,50 @@ function PurchaseSimulator({ onResult }) {
   )
 }
 
-function statusClass(status) {
-  if (status === 'approved') return 'status approved'
-  if (status === 'blocked') return 'status blocked'
-  return 'status error'
+const statusCellClassRules = {
+  'status-cell-approved': (params) => params.value === 'approved',
+  'status-cell-blocked': (params) => params.value === 'blocked',
+  'status-cell-pending': (params) => params.value !== 'approved' && params.value !== 'blocked',
 }
 
 function AuditLog({ transactions, refresh }) {
+  const columnDefs = useMemo(
+    () => [
+      { headerName: 'Time', field: 'created_at', minWidth: 160 },
+      { headerName: 'Amount', field: 'amount', minWidth: 100, valueFormatter: (p) => `$${p.value}` },
+      { headerName: 'Category', field: 'category', minWidth: 120 },
+      { headerName: 'Status', field: 'status', minWidth: 110, cellClassRules: statusCellClassRules },
+      { headerName: 'Risk', field: 'risk_score', minWidth: 90 },
+      { headerName: 'Agent reasoning', field: 'agent_reasoning', flex: 2, minWidth: 220, wrapText: true, autoHeight: true },
+      { headerName: 'Rule check result', field: 'rule_check_result', flex: 1.5, minWidth: 180, wrapText: true, autoHeight: true },
+      { headerName: 'Risk notes', field: 'risk_explanation', flex: 1.5, minWidth: 180, wrapText: true, autoHeight: true },
+      { headerName: 'PayPal order ID', field: 'paypal_order_id', minWidth: 160 },
+    ],
+    []
+  )
+
+  const defaultColDef = useMemo(
+    () => ({ flex: 1, minWidth: 100, resizable: true, sortable: true }),
+    []
+  )
+
   return (
     <div className="panel">
       <div className="panel-header">
         <h2>Audit Log</h2>
         <button type="button" onClick={refresh}>Refresh</button>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Amount</th>
-            <th>Category</th>
-            <th>Reasoning</th>
-            <th>Rule check</th>
-            <th>Risk</th>
-            <th>Risk notes</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {transactions.map((t) => (
-            <tr key={t.id}>
-              <td>{t.created_at}</td>
-              <td>${t.amount}</td>
-              <td>{t.category}</td>
-              <td>{t.agent_reasoning}</td>
-              <td>{t.rule_check_result}</td>
-              <td>{t.risk_score}</td>
-              <td>{t.risk_explanation}</td>
-              <td><span className={statusClass(t.status)}>{t.status}</span></td>
-            </tr>
-          ))}
-          {transactions.length === 0 && (
-            <tr><td colSpan={8}>No transactions yet.</td></tr>
-          )}
-        </tbody>
-      </table>
+      <div className="grid-wrap">
+        <AgGridReact
+          theme={gridTheme}
+          rowData={transactions}
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          getRowId={(params) => String(params.data.id)}
+          domLayout="normal"
+          suppressCellFocus
+        />
+      </div>
     </div>
   )
 }
@@ -169,7 +176,11 @@ function App() {
     fetch(`${API_BASE}/api/transactions`).then((r) => r.json()).then(setTransactions)
   }
 
-  useEffect(refresh, [])
+  useEffect(() => {
+    refresh()
+    const interval = setInterval(refresh, REFRESH_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <div className="app">

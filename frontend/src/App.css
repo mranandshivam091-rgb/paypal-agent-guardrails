@@ -106,38 +106,24 @@ main {
   font-size: 0.8rem;
 }
 
-table {
+.grid-wrap {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
+  height: 440px;
   margin-top: 1rem;
+  overflow-x: auto;
 }
 
-th,
-td {
-  text-align: left;
-  padding: 0.5rem;
-  border-bottom: 1px solid #2a2e37;
-  vertical-align: top;
+.status-cell-approved {
+  background-color: #10351f !important;
+  color: #5fd184 !important;
 }
 
-.status {
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.75rem;
+.status-cell-blocked {
+  background-color: #3a1414 !important;
+  color: #f0716b !important;
 }
 
-.status.approved {
-  background: #10351f;
-  color: #5fd184;
-}
-
-.status.blocked {
-  background: #3a1414;
-  color: #f0716b;
-}
-
-.status.error {
-  background: #3a2f14;
-  color: #f0c86b;
+.status-cell-pending {
+  background-color: #3a2f14 !important;
+  color: #f0c86b !important;
 }
