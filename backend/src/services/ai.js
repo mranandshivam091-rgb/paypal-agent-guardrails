@@ -27,6 +27,24 @@ async function generateContentWithRetry(model, prompt, attempts = 5) {
   }
 }
 
+// Static fallback for when Gemini is unreachable even after retries — used so a purchase
+// decision never depends on the AI service being up.
+const FALLBACK_REASONING = 'Reasoning unavailable (AI service timeout).';
+
+// Derives a risk score from the deterministic rule-check result alone, for use when the AI
+// risk assessment couldn't be obtained (service down, or returned unparseable output).
+function fallbackRiskFromRuleCheck(ruleCheckResult) {
+  if (ruleCheckResult === 'passed') {
+    return { riskScore: 20, explanation: 'AI risk assessment unavailable; defaulted to low risk because the rule check passed.' };
+  }
+  const violationCount = ruleCheckResult.split(';').filter(Boolean).length;
+  const riskScore = Math.min(100, 50 + violationCount * 15);
+  return {
+    riskScore,
+    explanation: `AI risk assessment unavailable; defaulted to elevated risk based on ${violationCount} rule violation(s).`,
+  };
+}
+
 // Has the agent explain, in its own voice, why it wants to make this purchase.
 async function generateAgentReasoning(item, amount, category) {
   const model = genAI.getGenerativeModel({
@@ -35,15 +53,21 @@ async function generateAgentReasoning(item, amount, category) {
       "You are an AI shopping agent that just decided to make a purchase on behalf of the user whose account you manage. Write a short, realistic, first-person justification (2-3 sentences) explaining why you're making this purchase, as if explaining your decision to the user. Be concrete and natural, not robotic. Respond with only the justification text, nothing else.",
   });
 
-  const result = await generateContentWithRetry(
-    model,
-    `Item: ${item}\nAmount: $${amount}\nCategory: ${category}`
-  );
-  return result.response.text().trim();
+  try {
+    const result = await generateContentWithRetry(
+      model,
+      `Item: ${item}\nAmount: $${amount}\nCategory: ${category}`
+    );
+    return result.response.text().trim();
+  } catch (err) {
+    console.warn('generateAgentReasoning: Gemini call failed after retries, falling back:', err.message);
+    return FALLBACK_REASONING;
+  }
 }
 
 // Scores the risk of a proposed purchase using the rule-check result and recent transaction
-// history as context, instead of a static formula.
+// history as context, instead of a static formula. Falls back to a rule-check-severity-based
+// score if Gemini is unreachable or returns unparseable output.
 async function assessRisk(amount, category, reasoning, ruleCheckResult, recentTransactions) {
   const history = recentTransactions.length
     ? recentTransactions
@@ -61,10 +85,16 @@ async function assessRisk(amount, category, reasoning, ruleCheckResult, recentTr
     generationConfig: { responseMimeType: 'application/json' },
   });
 
-  const result = await generateContentWithRetry(
-    model,
-    `Amount: $${amount}\nCategory: ${category}\nAgent's reasoning: ${reasoning}\nRule check result: ${ruleCheckResult}\n\nRecent transactions (most recent first):\n${history}`
-  );
+  let result;
+  try {
+    result = await generateContentWithRetry(
+      model,
+      `Amount: $${amount}\nCategory: ${category}\nAgent's reasoning: ${reasoning}\nRule check result: ${ruleCheckResult}\n\nRecent transactions (most recent first):\n${history}`
+    );
+  } catch (err) {
+    console.warn('assessRisk: Gemini call failed after retries, falling back to rule-check severity:', err.message);
+    return fallbackRiskFromRuleCheck(ruleCheckResult);
+  }
 
   try {
     const parsed = JSON.parse(stripCodeFences(result.response.text()));
@@ -72,8 +102,9 @@ async function assessRisk(amount, category, reasoning, ruleCheckResult, recentTr
       riskScore: Math.max(0, Math.min(100, Math.round(Number(parsed.risk_score)))),
       explanation: String(parsed.explanation || ''),
     };
-  } catch {
-    return { riskScore: 50, explanation: 'Could not parse AI risk assessment; defaulted to medium risk.' };
+  } catch (err) {
+    console.warn('assessRisk: could not parse Gemini response, falling back to rule-check severity:', err.message);
+    return fallbackRiskFromRuleCheck(ruleCheckResult);
   }
 }
 
