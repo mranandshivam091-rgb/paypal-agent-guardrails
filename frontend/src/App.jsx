@@ -145,6 +145,14 @@ function RulesPanel() {
           onChange={(e) => setRules({ ...rules, blocked_categories: e.target.value })}
         />
       </label>
+      <label>
+        Require confirmation above ($) (optional — leave blank to disable)
+        <input
+          type="number"
+          value={rules.confirm_above_amount ?? ''}
+          onChange={(e) => setRules({ ...rules, confirm_above_amount: e.target.value })}
+        />
+      </label>
       <button type="submit" className="btn-primary">Save rules</button>
       {savedAt && <span className="hint">Saved {savedAt}</span>}
     </form>
@@ -208,12 +216,17 @@ function statusBucket(status) {
   return 'pending'
 }
 
+function statusLabel(status) {
+  if (status === 'pending_confirmation') return 'needs review'
+  return status
+}
+
 function StatusBadgeRenderer({ value }) {
   const bucket = statusBucket(value)
   const icon = bucket === 'approved' ? <CheckIcon /> : bucket === 'blocked' ? <XIcon /> : <ClockIcon />
   return (
     <span className={`badge badge-${bucket}`}>
-      {icon} {value}
+      {icon} {statusLabel(value)}
     </span>
   )
 }
@@ -241,14 +254,36 @@ function DetailField({ label, children }) {
 // Enterprise-only (requires a license, shows a watermark without one — not viable for a public
 // demo). This uses isFullWidthRow + fullWidthCellRenderer instead, which are Community features:
 // expanding a row injects a synthetic full-width "detail" row right after it in rowData.
-function DetailRowRenderer({ data }) {
+function DetailRowRenderer({ data, refresh }) {
   const t = data.parent
+  const [submitting, setSubmitting] = useState(false)
+
+  const decide = async (action) => {
+    setSubmitting(true)
+    try {
+      await fetch(`${API_BASE}/api/transactions/${t.id}/${action}`, { method: 'POST' })
+      refresh()
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <div className="detail-panel">
       <DetailField label="Agent reasoning">{t.agent_reasoning || '—'}</DetailField>
       <DetailField label="Rule check result">{t.rule_check_result || '—'}</DetailField>
       <DetailField label="Risk notes">{t.risk_explanation || '—'}</DetailField>
       <DetailField label="PayPal order ID">{t.paypal_order_id || '—'}</DetailField>
+      {t.status === 'pending_confirmation' && (
+        <div className="confirm-actions">
+          <button type="button" className="btn-approve" disabled={submitting} onClick={() => decide('approve')}>
+            {submitting ? 'Working…' : 'Approve'}
+          </button>
+          <button type="button" className="btn-reject" disabled={submitting} onClick={() => decide('reject')}>
+            {submitting ? 'Working…' : 'Reject'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -309,7 +344,11 @@ function AuditLog({ transactions, refresh }) {
           getRowId={(params) => String(params.data.id)}
           isFullWidthRow={(params) => params.rowNode.data._detail}
           fullWidthCellRenderer={DetailRowRenderer}
-          getRowHeight={(params) => (params.data._detail ? 320 : 44)}
+          fullWidthCellRendererParams={{ refresh }}
+          getRowHeight={(params) => {
+            if (!params.data._detail) return 44
+            return params.data.parent.status === 'pending_confirmation' ? 420 : 340
+          }}
           onRowClicked={(e) => {
             if (!e.data._detail) toggleExpand(e.data.id)
           }}

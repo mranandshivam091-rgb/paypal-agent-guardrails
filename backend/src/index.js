@@ -44,20 +44,23 @@ app.get('/api/rules', (req, res) => {
 });
 
 app.put('/api/rules', (req, res) => {
-  const { max_transaction_amount, daily_limit, allowed_categories, blocked_categories } = req.body;
+  const { max_transaction_amount, daily_limit, allowed_categories, blocked_categories, confirm_above_amount } =
+    req.body;
   db.prepare(
     `UPDATE rules SET
       max_transaction_amount = ?,
       daily_limit = ?,
       allowed_categories = ?,
       blocked_categories = ?,
+      confirm_above_amount = ?,
       updated_at = datetime('now')
      WHERE id = 1`
   ).run(
     Number(max_transaction_amount),
     Number(daily_limit),
     allowed_categories || '',
-    blocked_categories || ''
+    blocked_categories || '',
+    confirm_above_amount === '' || confirm_above_amount == null ? null : Number(confirm_above_amount)
   );
   const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
   res.json(rules);
@@ -70,7 +73,9 @@ app.get('/api/transactions', (req, res) => {
 
 // The agent-facing endpoint: an AI agent proposes a purchase (optionally with its own reasoning
 // — if omitted, Gemini generates it). The deterministic rule check runs first; Gemini then scores
-// risk using that result plus recent transaction history. PayPal is only called if allowed.
+// risk using that result plus recent transaction history. PayPal is only called immediately if
+// the purchase is auto-approved — a 'blocked' or 'pending_confirmation' decision never reaches
+// PayPal here (pending ones can still reach it later via the approve endpoint below).
 app.post('/api/agent/purchase', async (req, res) => {
   try {
     const { amount, category } = req.body;
@@ -87,7 +92,7 @@ app.post('/api/agent/purchase', async (req, res) => {
       )
       .get().total;
 
-    const { allowed, ruleCheckResult } = evaluateTransaction({ amount, category }, rules, todaySpend);
+    const { decision, ruleCheckResult } = evaluateTransaction({ amount, category }, rules, todaySpend);
 
     if (!reasoning) {
       reasoning = await generateAgentReasoning(category || 'this item', amount, category);
@@ -102,10 +107,10 @@ app.post('/api/agent/purchase', async (req, res) => {
       recentTransactions
     );
 
-    let status = allowed ? 'approved' : 'blocked';
+    let status = decision;
     let paypalOrderId = null;
 
-    if (allowed) {
+    if (decision === 'approved') {
       try {
         const order = await createOrder(amount, reasoning || category || 'Agent purchase');
         paypalOrderId = order.id;
@@ -124,6 +129,56 @@ app.post('/api/agent/purchase', async (req, res) => {
 
     const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(result.lastInsertRowid);
     res.json(transaction);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Human-in-the-loop decision on a pending_confirmation transaction. Approving creates the real
+// PayPal order now (it was deliberately withheld at proposal time); rejecting just blocks it.
+app.post('/api/transactions/:id/approve', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+    if (!transaction) return res.status(404).json({ error: 'transaction not found' });
+    if (transaction.status !== 'pending_confirmation') {
+      return res.status(400).json({ error: `transaction is not pending confirmation (status: ${transaction.status})` });
+    }
+
+    let status = 'approved';
+    let paypalOrderId = null;
+    try {
+      const order = await createOrder(
+        transaction.amount,
+        transaction.agent_reasoning || transaction.category || 'Agent purchase'
+      );
+      paypalOrderId = order.id;
+    } catch (err) {
+      status = 'error';
+    }
+
+    db.prepare('UPDATE transactions SET status = ?, paypal_order_id = ? WHERE id = ?').run(status, paypalOrderId, id);
+    const updated = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+    res.json(updated);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/transactions/:id/reject', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+    if (!transaction) return res.status(404).json({ error: 'transaction not found' });
+    if (transaction.status !== 'pending_confirmation') {
+      return res.status(400).json({ error: `transaction is not pending confirmation (status: ${transaction.status})` });
+    }
+
+    db.prepare("UPDATE transactions SET status = 'blocked' WHERE id = ?").run(id);
+    const updated = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
+    res.json(updated);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });

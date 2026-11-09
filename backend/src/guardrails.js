@@ -7,6 +7,11 @@ function parseCategoryList(text) {
 
 // Deterministic rule check: amount/category limits only. Risk scoring is handled separately
 // by the AI risk-assessment service (services/ai.js), which has context this function doesn't.
+//
+// Three-way decision instead of a simple allow/deny: a hard-rule violation (blocked category,
+// over max_transaction_amount or daily_limit) is always 'blocked'. Within those hard limits, an
+// amount over confirm_above_amount is 'pending_confirmation' — not auto-approved, but not
+// rejected either, pending a human decision. Everything else is 'approved'.
 function evaluateTransaction({ amount, category }, rules, todaySpend) {
   const allowedCategories = parseCategoryList(rules.allowed_categories);
   const blockedCategories = parseCategoryList(rules.blocked_categories);
@@ -29,10 +34,18 @@ function evaluateTransaction({ amount, category }, rules, todaySpend) {
     );
   }
 
-  const allowed = violations.length === 0;
-  const ruleCheckResult = allowed ? 'passed' : violations.join('; ');
+  if (violations.length > 0) {
+    return { decision: 'blocked', ruleCheckResult: violations.join('; ') };
+  }
 
-  return { allowed, ruleCheckResult };
+  if (rules.confirm_above_amount != null && amount > rules.confirm_above_amount) {
+    return {
+      decision: 'pending_confirmation',
+      ruleCheckResult: `passed hard limits; requires human confirmation (amount $${amount} exceeds confirm-above threshold of $${rules.confirm_above_amount})`,
+    };
+  }
+
+  return { decision: 'approved', ruleCheckResult: 'passed' };
 }
 
 module.exports = { evaluateTransaction };

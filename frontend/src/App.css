@@ -302,3 +302,41 @@ main {
   overflow-wrap: break-word;
   word-break: break-word;
 }
+
+.confirm-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 4px;
+}
+
+.btn-approve,
+.btn-reject {
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: 0.5rem 1.25rem;
+  font-weight: 700;
+  font-size: 0.82rem;
+  font-family: inherit;
+  color: white;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-approve {
+  background: var(--success);
+}
+
+.btn-reject {
+  background: var(--error);
+}
+
+.btn-approve:hover:not(:disabled),
+.btn-reject:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.btn-approve:disabled,
+.btn-reject:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

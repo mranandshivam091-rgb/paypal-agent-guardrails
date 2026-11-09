@@ -23,6 +23,7 @@ db.exec(`
     daily_limit REAL NOT NULL DEFAULT 500,
     allowed_categories TEXT NOT NULL DEFAULT '',
     blocked_categories TEXT NOT NULL DEFAULT '',
+    confirm_above_amount REAL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
