@@ -20,12 +20,35 @@ still missing from most agent-payment integrations.
 
 ## What this does
 
-A user sets spending rules (per-transaction cap, daily limit, allowed/blocked categories). When an
-AI agent wants to make a purchase, it calls this system's API instead of PayPal directly. The
-system checks the purchase against the rules, has Gemini generate the agent's justification and a
-context-aware risk score, and only forwards the purchase to PayPal if it passes. Every decision —
-approved or blocked — is logged with full reasoning in a live audit dashboard, so a human never has
-to be in the loop for each transaction but can always see exactly what happened and why.
+A user sets spending rules (per-transaction cap, daily limit, allowed/blocked categories, and an
+optional "confirm above" threshold). When an AI agent wants to make a purchase, it calls this
+system's API instead of PayPal directly. The system checks the purchase against the rules, has
+Gemini generate the agent's justification and a context-aware risk score, and decides what happens
+next — see Three-state decision flow below. Every decision is logged with full reasoning in a live
+audit dashboard, so a human never has to be in the loop for each transaction but can always see
+exactly what happened and why — and can step in directly when the system asks them to.
+
+### Three-state decision flow
+
+This isn't a simple allow/deny gate. Every proposed purchase lands in one of three states:
+
+1. **Auto-approved** — passes all hard rules and stays under the "confirm above" threshold (if
+   one is set). PayPal order created immediately, no human involved.
+2. **Hard-blocked** — violates a non-negotiable rule: a blocked category, or over the absolute
+   per-transaction / daily limit. Rejected outright, no PayPal order, nothing to review.
+3. **Flagged for human confirmation** — passes every hard rule but exceeds the softer
+   `confirm_above_amount` threshold. Not auto-approved and not blocked: it's logged as
+   `pending_confirmation` with no PayPal order yet, and shows up in the dashboard with an amber
+   "needs review" badge. A human expands the row and clicks **Approve** (creates the real PayPal
+   order now) or **Reject** (blocks it, no order ever created) — so the guardrail layer doesn't
+   have to be maximally strict *or* maximally permissive, it can ask.
+
+One more thing worth knowing: Gemini's risk score isn't just a function of the dollar amount — it
+reacts to the actual content of the agent's stated reasoning. In testing, two $60 purchases against
+the same rules scored very differently: one with ordinary reasoning scored risk **15**, while one
+whose reasoning literally said *"Testing the reject path"* scored risk **75**, with Gemini's own
+explanation flagging the phrasing itself as "potentially erratic or probing behavior." Same amount,
+same rules — the score moved because the content did.
 
 ## Live demo
 
@@ -44,19 +67,23 @@ AI agent
    ▼
 Express API (backend/src/index.js)
    │
-   ├─▶ Rules engine (guardrails.js)        deterministic: amount/category/daily-limit check
+   ├─▶ Rules engine (guardrails.js)        deterministic three-way decision: blocked /
+   │                                        pending_confirmation / approved (see above)
    │
    ├─▶ Gemini (services/ai.js)             generates reasoning (if omitted) + context-aware
    │                                        risk score, using the rule-check result and the
    │                                        last 5 transactions
    │
-   ├─▶ PayPal Sandbox Orders API           only called if the rule check passed
-   │   (services/paypal.js)
+   ├─▶ PayPal Sandbox Orders API           called immediately if auto-approved; called later,
+   │   (services/paypal.js)                 from a human Approve click, if pending_confirmation
    │
    └─▶ SQLite (db.js)                      every decision logged: amount, category, reasoning,
                                             rule check result, risk score, status, PayPal order ID
 
 React dashboard (AG Grid) ── polls GET /api/transactions every 5s ──▶ live audit log
+                                   │
+                                   └─▶ pending_confirmation rows get Approve/Reject buttons,
+                                       calling POST /api/transactions/:id/approve or /reject
 ```
 
 The rule check is deliberately kept deterministic and separate from the AI calls — a
@@ -93,8 +120,12 @@ Runs on `http://localhost:5173`.
 - `GET/PUT /api/rules` — view/edit the active spending rules
 - `GET /api/transactions` — the audit log
 - `POST /api/agent/purchase` — the agent-facing endpoint: `{ amount, category, reasoning? }`. Runs
-  the rule check, generates reasoning via Gemini if omitted, scores risk via Gemini, and only
-  creates a PayPal order if the rule check passes.
+  the rule check, generates reasoning via Gemini if omitted, scores risk via Gemini, and creates a
+  PayPal order immediately only if auto-approved.
+- `POST /api/transactions/:id/approve` — approves a `pending_confirmation` transaction, creating
+  the real PayPal order and flipping its status to `approved`.
+- `POST /api/transactions/:id/reject` — rejects a `pending_confirmation` transaction, flipping its
+  status to `blocked` with no PayPal order.
 - `POST /api/test-order` — basic PayPal sandbox connectivity smoke test
 
 ## Tools used
