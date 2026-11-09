@@ -20,7 +20,13 @@ const gridTheme = themeQuartz.withParams({
 })
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+const DEMO_KEY = import.meta.env.VITE_DEMO_KEY || ''
 const REFRESH_INTERVAL_MS = 5000
+
+// Write requests (POST/PUT) need the shared-secret header; read requests don't.
+function writeHeaders() {
+  return { 'Content-Type': 'application/json', 'X-Demo-Key': DEMO_KEY }
+}
 
 function RulesIcon() {
   return (
@@ -92,6 +98,7 @@ function PanelTitle({ icon, children }) {
 function RulesPanel() {
   const [rules, setRules] = useState(null)
   const [savedAt, setSavedAt] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
     fetch(`${API_BASE}/api/rules`).then((r) => r.json()).then(setRules)
@@ -101,13 +108,18 @@ function RulesPanel() {
 
   const save = async (e) => {
     e.preventDefault()
-    const res = await fetch(`${API_BASE}/api/rules`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(rules),
-    })
-    setRules(await res.json())
-    setSavedAt(new Date().toLocaleTimeString())
+    setSubmitting(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/rules`, {
+        method: 'PUT',
+        headers: writeHeaders(),
+        body: JSON.stringify(rules),
+      })
+      setRules(await res.json())
+      setSavedAt(new Date().toLocaleTimeString())
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -153,7 +165,9 @@ function RulesPanel() {
           onChange={(e) => setRules({ ...rules, confirm_above_amount: e.target.value })}
         />
       </label>
-      <button type="submit" className="btn-primary">Save rules</button>
+      <button type="submit" className="btn-primary" disabled={submitting}>
+        {submitting ? 'Saving…' : 'Save rules'}
+      </button>
       {savedAt && <span className="hint">Saved {savedAt}</span>}
     </form>
   )
@@ -164,18 +178,26 @@ function PurchaseSimulator({ onResult }) {
   const [category, setCategory] = useState('software')
   const [reasoning, setReasoning] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
   const submit = async (e) => {
     e.preventDefault()
+    setError('')
     setSubmitting(true)
     try {
       const res = await fetch(`${API_BASE}/api/agent/purchase`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: writeHeaders(),
         body: JSON.stringify({ amount: Number(amount), category, reasoning }),
       })
-      const transaction = await res.json()
-      onResult(transaction)
+      const body = await res.json()
+      if (!res.ok) {
+        setError(body.error || 'Something went wrong submitting the purchase.')
+        return
+      }
+      onResult(body)
+    } catch {
+      setError('Could not reach the backend. Is it running?')
     } finally {
       setSubmitting(false)
     }
@@ -203,6 +225,7 @@ function PurchaseSimulator({ onResult }) {
           placeholder="Why the agent wants to make this purchase"
         />
       </label>
+      {error && <p className="form-error">{error}</p>}
       <button type="submit" className="btn-primary" disabled={submitting}>
         {submitting ? 'Submitting…' : 'Propose purchase'}
       </button>
@@ -261,7 +284,10 @@ function DetailRowRenderer({ data, refresh }) {
   const decide = async (action) => {
     setSubmitting(true)
     try {
-      await fetch(`${API_BASE}/api/transactions/${t.id}/${action}`, { method: 'POST' })
+      await fetch(`${API_BASE}/api/transactions/${t.id}/${action}`, {
+        method: 'POST',
+        headers: writeHeaders(),
+      })
       refresh()
     } finally {
       setSubmitting(false)
@@ -389,6 +415,9 @@ function App() {
           <AuditLog transactions={transactions} refresh={refresh} />
         </div>
       </main>
+      <footer className="disclaimer">
+        Independent hackathon project for the PayPal AI Hackathon — not an official PayPal product.
+      </footer>
     </div>
   )
 }

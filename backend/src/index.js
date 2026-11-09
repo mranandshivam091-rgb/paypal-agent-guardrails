@@ -10,6 +10,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Lightweight shared-secret gate for write endpoints, so a public demo link can't be used to
+// wipe/alter the audit trail judges are viewing. Read-only routes stay open — no setup needed
+// to just look at the dashboard.
+function requireDemoKey(req, res, next) {
+  if (!process.env.DEMO_API_KEY || req.headers['x-demo-key'] !== process.env.DEMO_API_KEY) {
+    return res.status(401).json({ error: 'missing or invalid X-Demo-Key header' });
+  }
+  next();
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
@@ -43,7 +53,7 @@ app.get('/api/rules', (req, res) => {
   res.json(rules);
 });
 
-app.put('/api/rules', (req, res) => {
+app.put('/api/rules', requireDemoKey, (req, res) => {
   const { max_transaction_amount, daily_limit, allowed_categories, blocked_categories, confirm_above_amount } =
     req.body;
   db.prepare(
@@ -76,12 +86,15 @@ app.get('/api/transactions', (req, res) => {
 // risk using that result plus recent transaction history. PayPal is only called immediately if
 // the purchase is auto-approved — a 'blocked' or 'pending_confirmation' decision never reaches
 // PayPal here (pending ones can still reach it later via the approve endpoint below).
-app.post('/api/agent/purchase', async (req, res) => {
+app.post('/api/agent/purchase', requireDemoKey, async (req, res) => {
   try {
     const { amount, category } = req.body;
     let { reasoning } = req.body;
     if (typeof amount !== 'number' || amount <= 0) {
       return res.status(400).json({ error: 'amount must be a positive number' });
+    }
+    if (typeof category !== 'string' || category.trim().length === 0) {
+      return res.status(400).json({ error: 'category must be a non-empty string' });
     }
 
     const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
@@ -137,7 +150,7 @@ app.post('/api/agent/purchase', async (req, res) => {
 
 // Human-in-the-loop decision on a pending_confirmation transaction. Approving creates the real
 // PayPal order now (it was deliberately withheld at proposal time); rejecting just blocks it.
-app.post('/api/transactions/:id/approve', async (req, res) => {
+app.post('/api/transactions/:id/approve', requireDemoKey, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);
@@ -167,7 +180,7 @@ app.post('/api/transactions/:id/approve', async (req, res) => {
   }
 });
 
-app.post('/api/transactions/:id/reject', (req, res) => {
+app.post('/api/transactions/:id/reject', requireDemoKey, (req, res) => {
   try {
     const id = Number(req.params.id);
     const transaction = db.prepare('SELECT * FROM transactions WHERE id = ?').get(id);

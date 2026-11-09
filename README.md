@@ -1,5 +1,7 @@
 # PayPal Agent Guardrails
 
+*Independent hackathon project for the PayPal AI Hackathon — not an official PayPal product.*
+
 An AI-governed spending control and audit layer that sits between AI agents and PayPal payments —
 so a user can define exactly what an agent is allowed to buy, and see a full audit trail of every
 agent-initiated transaction: the agent's reasoning, an AI-generated risk score, and whether PayPal
@@ -100,32 +102,39 @@ billing required).
 ```bash
 cd backend
 npm install
-cp .env.example .env   # fill in PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, GEMINI_API_KEY
+cp .env.example .env   # fill in PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, GEMINI_API_KEY, DEMO_API_KEY
 npm run dev
 ```
-Runs on `http://localhost:4000`.
+Runs on `http://localhost:4000`. `DEMO_API_KEY` can be any string you pick — it just needs to
+match `VITE_DEMO_KEY` on the frontend (see below).
 
 **Frontend** (separate terminal):
 ```bash
 cd frontend
 npm install
-cp .env.example .env   # VITE_API_URL defaults to http://localhost:4000, override if needed
+cp .env.example .env   # VITE_API_URL defaults to http://localhost:4000; set VITE_DEMO_KEY to match the backend's DEMO_API_KEY
 npm run dev
 ```
 Runs on `http://localhost:5173`.
 
 ### API reference
 
+Write endpoints (marked 🔒) require an `X-Demo-Key` header matching `DEMO_API_KEY` — this is a
+lightweight gate so a public demo link can't be used to alter or wipe the audit trail judges are
+viewing. The frontend sends it automatically via `VITE_DEMO_KEY`. Read endpoints are open.
+
 - `GET /api/health` — health check
-- `GET/PUT /api/rules` — view/edit the active spending rules
+- `GET /api/rules` — view the active spending rules
+- 🔒 `PUT /api/rules` — edit the active spending rules
 - `GET /api/transactions` — the audit log
-- `POST /api/agent/purchase` — the agent-facing endpoint: `{ amount, category, reasoning? }`. Runs
-  the rule check, generates reasoning via Gemini if omitted, scores risk via Gemini, and creates a
+- 🔒 `POST /api/agent/purchase` — the agent-facing endpoint: `{ amount, category, reasoning? }`
+  (`amount` must be a positive number, `category` a non-empty string — otherwise 400). Runs the
+  rule check, generates reasoning via Gemini if omitted, scores risk via Gemini, and creates a
   PayPal order immediately only if auto-approved.
-- `POST /api/transactions/:id/approve` — approves a `pending_confirmation` transaction, creating
+- 🔒 `POST /api/transactions/:id/approve` — approves a `pending_confirmation` transaction, creating
   the real PayPal order and flipping its status to `approved`.
-- `POST /api/transactions/:id/reject` — rejects a `pending_confirmation` transaction, flipping its
-  status to `blocked` with no PayPal order.
+- 🔒 `POST /api/transactions/:id/reject` — rejects a `pending_confirmation` transaction, flipping
+  its status to `blocked` with no PayPal order.
 - `POST /api/test-order` — basic PayPal sandbox connectivity smoke test
 
 ## Tools used
