@@ -126,35 +126,11 @@ function RulesPanel() {
     <form className="panel" onSubmit={save}>
       <PanelTitle icon={<RulesIcon />}>Spending Rules</PanelTitle>
       <label>
-        Max per transaction ($)
-        <input
-          type="number"
-          value={rules.max_transaction_amount}
-          onChange={(e) => setRules({ ...rules, max_transaction_amount: e.target.value })}
-        />
-      </label>
-      <label>
-        Daily limit ($)
-        <input
-          type="number"
-          value={rules.daily_limit}
-          onChange={(e) => setRules({ ...rules, daily_limit: e.target.value })}
-        />
-      </label>
-      <label>
-        Allowed categories (comma-separated, blank = any)
+        Flagged categories (require review)
         <input
           type="text"
-          value={rules.allowed_categories}
-          onChange={(e) => setRules({ ...rules, allowed_categories: e.target.value })}
-        />
-      </label>
-      <label>
-        Blocked categories (comma-separated)
-        <input
-          type="text"
-          value={rules.blocked_categories}
-          onChange={(e) => setRules({ ...rules, blocked_categories: e.target.value })}
+          value={rules.flagged_categories}
+          onChange={(e) => setRules({ ...rules, flagged_categories: e.target.value })}
         />
       </label>
       <label>

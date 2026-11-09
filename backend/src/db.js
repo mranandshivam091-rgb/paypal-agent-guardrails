@@ -19,15 +19,24 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS rules (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    max_transaction_amount REAL NOT NULL DEFAULT 100,
-    daily_limit REAL NOT NULL DEFAULT 500,
-    allowed_categories TEXT NOT NULL DEFAULT '',
-    blocked_categories TEXT NOT NULL DEFAULT '',
+    flagged_categories TEXT NOT NULL DEFAULT '',
     confirm_above_amount REAL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   INSERT OR IGNORE INTO rules (id) VALUES (1);
 `);
+
+// Migrate installs created before the hard-block tier was removed: the old rules table had
+// max_transaction_amount/daily_limit/allowed_categories/blocked_categories columns instead of
+// flagged_categories. CREATE TABLE IF NOT EXISTS above is a no-op on an existing table, so add
+// the new column by hand and carry over blocked_categories as the starting flagged list.
+const ruleColumns = db.prepare("PRAGMA table_info(rules)").all().map((c) => c.name);
+if (!ruleColumns.includes('flagged_categories')) {
+  db.exec("ALTER TABLE rules ADD COLUMN flagged_categories TEXT NOT NULL DEFAULT ''");
+  if (ruleColumns.includes('blocked_categories')) {
+    db.exec('UPDATE rules SET flagged_categories = blocked_categories');
+  }
+}
 
 module.exports = db;

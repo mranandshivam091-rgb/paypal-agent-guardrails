@@ -22,28 +22,31 @@ still missing from most agent-payment integrations.
 
 ## What this does
 
-A user sets spending rules (per-transaction cap, daily limit, allowed/blocked categories, and an
-optional "confirm above" threshold). When an AI agent wants to make a purchase, it calls this
-system's API instead of PayPal directly. The system checks the purchase against the rules, has
-Gemini generate the agent's justification and a context-aware risk score, and decides what happens
-next — see Three-state decision flow below. Every decision is logged with full reasoning in a live
-audit dashboard, so a human never has to be in the loop for each transaction but can always see
-exactly what happened and why — and can step in directly when the system asks them to.
+A user sets spending rules — a "confirm above" threshold and a list of categories that always need
+a second look. When an AI agent wants to make a purchase, it calls this system's API instead of
+PayPal directly. The system checks the purchase against the rules, has Gemini generate the agent's
+justification and a context-aware risk score, and decides what happens next — see Two-outcome
+decision flow below. Every decision is logged with full reasoning in a live audit dashboard, so a
+human never has to be in the loop for each transaction but can always see exactly what happened and
+why — and can step in directly when the system asks them to.
 
-### Three-state decision flow
+### Two-outcome decision flow
 
-This isn't a simple allow/deny gate. Every proposed purchase lands in one of three states:
+There is no auto-reject tier. The system never rejects a purchase on its own — it can only
+auto-approve or pause and ask a human. Every proposed purchase lands in one of two states:
 
-1. **Auto-approved** — passes all hard rules and stays under the "confirm above" threshold (if
-   one is set). PayPal order created immediately, no human involved.
-2. **Hard-blocked** — violates a non-negotiable rule: a blocked category, or over the absolute
-   per-transaction / daily limit. Rejected outright, no PayPal order, nothing to review.
-3. **Flagged for human confirmation** — passes every hard rule but exceeds the softer
-   `confirm_above_amount` threshold. Not auto-approved and not blocked: it's logged as
-   `pending_confirmation` with no PayPal order yet, and shows up in the dashboard with an amber
-   "needs review" badge. A human expands the row and clicks **Approve** (creates the real PayPal
-   order now) or **Reject** (blocks it, no order ever created) — so the guardrail layer doesn't
-   have to be maximally strict *or* maximally permissive, it can ask.
+1. **Auto-approved** — below the `confirm_above_amount` threshold and not in a flagged category.
+   PayPal order created immediately, no human involved.
+2. **Flagged for human confirmation** — at or above the threshold (no matter how large — there is
+   no upper ceiling) or in a flagged category. It's logged as `pending_confirmation` with no
+   PayPal order yet, and shows up in the dashboard with an amber "needs review" badge. A human
+   expands the row and clicks **Approve** (creates the real PayPal order now) or **Reject** (sets
+   it to `blocked`, no order ever created).
+
+`blocked` is a real status, but the system itself never assigns it — it only ever happens when a
+human explicitly clicks Reject on a pending purchase. No legitimate transaction is ever silently
+dropped by a rigid ceiling: every dollar either moves immediately or waits for a quick human
+decision.
 
 One more thing worth knowing: Gemini's risk score isn't just a function of the dollar amount — it
 reacts to the actual content of the agent's stated reasoning. In testing, two $60 purchases against
@@ -69,8 +72,8 @@ AI agent
    ▼
 Express API (backend/src/index.js)
    │
-   ├─▶ Rules engine (guardrails.js)        deterministic three-way decision: blocked /
-   │                                        pending_confirmation / approved (see above)
+   ├─▶ Rules engine (guardrails.js)        deterministic two-way decision: approved /
+   │                                        pending_confirmation — never auto-blocked (see above)
    │
    ├─▶ Gemini (services/ai.js)             generates reasoning (if omitted) + context-aware
    │                                        risk score, using the rule-check result and the

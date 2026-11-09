@@ -54,22 +54,15 @@ app.get('/api/rules', (req, res) => {
 });
 
 app.put('/api/rules', requireDemoKey, (req, res) => {
-  const { max_transaction_amount, daily_limit, allowed_categories, blocked_categories, confirm_above_amount } =
-    req.body;
+  const { flagged_categories, confirm_above_amount } = req.body;
   db.prepare(
     `UPDATE rules SET
-      max_transaction_amount = ?,
-      daily_limit = ?,
-      allowed_categories = ?,
-      blocked_categories = ?,
+      flagged_categories = ?,
       confirm_above_amount = ?,
       updated_at = datetime('now')
      WHERE id = 1`
   ).run(
-    Number(max_transaction_amount),
-    Number(daily_limit),
-    allowed_categories || '',
-    blocked_categories || '',
+    flagged_categories || '',
     confirm_above_amount === '' || confirm_above_amount == null ? null : Number(confirm_above_amount)
   );
   const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
@@ -83,9 +76,10 @@ app.get('/api/transactions', (req, res) => {
 
 // The agent-facing endpoint: an AI agent proposes a purchase (optionally with its own reasoning
 // — if omitted, Gemini generates it). The deterministic rule check runs first; Gemini then scores
-// risk using that result plus recent transaction history. PayPal is only called immediately if
-// the purchase is auto-approved — a 'blocked' or 'pending_confirmation' decision never reaches
-// PayPal here (pending ones can still reach it later via the approve endpoint below).
+// risk using that result plus recent transaction history. There's no auto-reject tier: the rule
+// check only ever returns 'approved' or 'pending_confirmation'. PayPal is only called immediately
+// if auto-approved — a pending one reaches PayPal later, only via the approve endpoint below, and
+// only ever becomes 'blocked' if a human clicks Reject on it.
 app.post('/api/agent/purchase', requireDemoKey, async (req, res) => {
   try {
     const { amount, category } = req.body;
@@ -98,14 +92,8 @@ app.post('/api/agent/purchase', requireDemoKey, async (req, res) => {
     }
 
     const rules = db.prepare('SELECT * FROM rules WHERE id = 1').get();
-    const todaySpend = db
-      .prepare(
-        `SELECT COALESCE(SUM(amount), 0) AS total FROM transactions
-         WHERE status = 'approved' AND date(created_at) = date('now')`
-      )
-      .get().total;
 
-    const { decision, ruleCheckResult } = evaluateTransaction({ amount, category }, rules, todaySpend);
+    const { decision, ruleCheckResult } = evaluateTransaction({ amount, category }, rules);
 
     if (!reasoning) {
       reasoning = await generateAgentReasoning(category || 'this item', amount, category);

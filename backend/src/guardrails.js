@@ -5,43 +5,30 @@ function parseCategoryList(text) {
     .filter(Boolean);
 }
 
-// Deterministic rule check: amount/category limits only. Risk scoring is handled separately
-// by the AI risk-assessment service (services/ai.js), which has context this function doesn't.
+// Deterministic rule check. There is no auto-reject tier: a purchase either auto-approves or
+// pauses for a human to decide. 'blocked' only ever happens later, when a human clicks Reject on
+// a pending transaction (see the /approve and /reject endpoints in index.js) — this function
+// never returns it.
 //
-// Three-way decision instead of a simple allow/deny: a hard-rule violation (blocked category,
-// over max_transaction_amount or daily_limit) is always 'blocked'. Within those hard limits, an
-// amount over confirm_above_amount is 'pending_confirmation' — not auto-approved, but not
-// rejected either, pending a human decision. Everything else is 'approved'.
-function evaluateTransaction({ amount, category }, rules, todaySpend) {
-  const allowedCategories = parseCategoryList(rules.allowed_categories);
-  const blockedCategories = parseCategoryList(rules.blocked_categories);
+// A flagged category always routes to pending_confirmation, regardless of amount. Otherwise,
+// amount >= confirm_above_amount (if set) routes to pending_confirmation, with no ceiling — any
+// amount above the threshold waits for a human, it never gets auto-rejected. Everything else is
+// 'approved'.
+function evaluateTransaction({ amount, category }, rules) {
+  const flaggedCategories = parseCategoryList(rules.flagged_categories);
   const normalizedCategory = (category || '').trim().toLowerCase();
 
-  const violations = [];
-
-  if (blockedCategories.includes(normalizedCategory)) {
-    violations.push(`category '${category}' is blocked`);
-  }
-  if (allowedCategories.length > 0 && !allowedCategories.includes(normalizedCategory)) {
-    violations.push(`category '${category}' is not in the allowed list`);
-  }
-  if (amount > rules.max_transaction_amount) {
-    violations.push(`amount $${amount} exceeds max transaction limit of $${rules.max_transaction_amount}`);
-  }
-  if (todaySpend + amount > rules.daily_limit) {
-    violations.push(
-      `would exceed daily limit of $${rules.daily_limit} (already spent $${todaySpend} today)`
-    );
-  }
-
-  if (violations.length > 0) {
-    return { decision: 'blocked', ruleCheckResult: violations.join('; ') };
-  }
-
-  if (rules.confirm_above_amount != null && amount > rules.confirm_above_amount) {
+  if (flaggedCategories.includes(normalizedCategory)) {
     return {
       decision: 'pending_confirmation',
-      ruleCheckResult: `passed hard limits; requires human confirmation (amount $${amount} exceeds confirm-above threshold of $${rules.confirm_above_amount})`,
+      ruleCheckResult: `requires human confirmation: category '${category}' is flagged for review`,
+    };
+  }
+
+  if (rules.confirm_above_amount != null && amount >= rules.confirm_above_amount) {
+    return {
+      decision: 'pending_confirmation',
+      ruleCheckResult: `requires human confirmation: amount $${amount} meets or exceeds confirm-above threshold of $${rules.confirm_above_amount}`,
     };
   }
 
